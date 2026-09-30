@@ -1,0 +1,286 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime
+
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="लक्ष्य AI - ट्रेडिंग टर्मिनल व ऑटोमेटेड जर्नल",
+    page_icon="📈",
+    layout="wide"
+)
+
+# Custom Dark Trading Theme Styling
+st.markdown("""
+    <style>
+        .stApp {
+            background-color: #080c14;
+            color: #f8fafc;
+        }
+        div[data-testid="stMetricValue"] {
+            font-size: 22px;
+            font-weight: 800;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- Symbol Configurations ---
+SYMBOL_CONFIG = {
+    'NIFTY 50': {'base': 24850.00, 'step': 6.0},
+    'BANKNIFTY': {'base': 51200.00, 'step': 15.0},
+    'RELIANCE': {'base': 2980.00, 'step': 1.5},
+    'TCS': {'base': 4150.00, 'step': 2.0},
+    'HDFCBANK': {'base': 1670.00, 'step': 1.0}
+}
+
+# --- State Initialization ---
+if 'capital' not in st.session_state:
+    st.session_state.capital = 100000.00
+if 'initial_capital' not in st.session_state:
+    st.session_state.initial_capital = 100000.00
+if 'journal' not in st.session_state:
+    st.session_state.journal = []
+if 'trade_id' not in st.session_state:
+    st.session_state.trade_id = 101
+if 'active_trade' not in st.session_state:
+    st.session_state.active_trade = None
+if 'df_candles' not in st.session_state:
+    st.session_state.df_candles = {}
+
+# Market Candle Generator
+def get_market_data(symbol):
+    if symbol not in st.session_state.df_candles:
+        cfg = SYMBOL_CONFIG[symbol]
+        prices = [cfg['base']]
+        for _ in range(35):
+            delta = (np.random.random() - 0.49) * cfg['step'] * 2
+            prices.append(prices[-1] + delta)
+        
+        records = []
+        for i, p in enumerate(prices):
+            records.append({
+                'Time': i,
+                'Open': p - np.random.uniform(0.5, 2.0),
+                'High': p + np.random.uniform(1.0, 4.0),
+                'Low': p - np.random.uniform(1.0, 4.0),
+                'Close': p
+            })
+        st.session_state.df_candles[symbol] = pd.DataFrame(records)
+    return st.session_state.df_candles[symbol]
+
+# Calculate Technical Indicators
+def calculate_indicators(df):
+    close_prices = df['Close']
+    df['EMA9'] = close_prices.ewm(span=9, adjust=False).mean()
+    df['EMA21'] = close_prices.ewm(span=21, adjust=False).mean()
+    
+    # 14-period RSI
+    delta = close_prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    df['RSI'] = 100 - (100 / (1 + rs))
+    df['RSI'] = df['RSI'].fillna(50.0)
+    return df
+
+# --- Header Section ---
+col_head1, col_head2 = st.columns([3, 1])
+with col_head1:
+    st.markdown("## 🎯 लक्ष्य AI TRADING BOT")
+    st.caption("मराठी अल्गो ट्रेडिंग टर्मिनल आणि ऑटोमेटेड जर्नल")
+with col_head2:
+    st.markdown(f"*वेळ:* {datetime.now().strftime('%H:%M:%S')}")
+    st.success("● मार्केट लाइव्ह (LIVE SIM)")
+
+st.divider()
+
+# --- KPI Dashboard Row ---
+net_pnl = st.session_state.capital - st.session_state.initial_capital
+net_pct = (net_pnl / st.session_state.initial_capital) * 100
+total_trades = len(st.session_state.journal)
+wins = sum(1 for t in st.session_state.journal if t['Status'] == 'WIN')
+losses = sum(1 for t in st.session_state.journal if t['Status'] == 'LOSS')
+win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("एकूण भांडवल (Balance)", f"₹{st.session_state.capital:,.2f}")
+k2.metric("चालू नफा/तोटा (Net P&L)", f"{'+' if net_pnl >= 0 else ''}₹{net_pnl:,.2f}", f"{net_pct:.2f}%")
+k3.metric("विन रेट (Win Rate)", f"{win_rate:.1f}%", f"{wins}W / {losses}L")
+k4.metric("एकूण पूर्ण ट्रेड्स", total_trades)
+
+st.divider()
+
+# --- Main Grid: Chart + Trading Panel ---
+col_chart, col_terminal = st.columns([2.2, 1])
+
+with col_chart:
+    selected_symbol = st.selectbox(
+        "स्टॉक / इंडेक्स निवडा (Select Symbol)", 
+        list(SYMBOL_CONFIG.keys()),
+        index=0
+    )
+    
+    df = get_market_data(selected_symbol)
+    df = calculate_indicators(df)
+    
+    current_price = df['Close'].iloc[-1]
+    prev_price = df['Close'].iloc[-2]
+    diff_pct = ((current_price - prev_price) / prev_price) * 100
+    
+    st.markdown(f"### {selected_symbol} : ₹{current_price:,.2f} ({'+' if diff_pct >= 0 else ''}{diff_pct:.2f}%)")
+
+    # Plotly Candlestick Chart
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['Open'],
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close'],
+        name='Candles',
+        increasing_line_color='#10b981',
+        decreasing_line_color='#ef4444'
+    ))
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA9'], mode='lines', name='EMA 9', line=dict(color='#38bdf8', width=1.5)))
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA21'], mode='lines', name='EMA 21', line=dict(color='#f59e0b', width=1.5)))
+    
+    # Active Trade Targets Visualization
+    if st.session_state.active_trade and st.session_state.active_trade['Symbol'] == selected_symbol:
+        fig.add_hline(y=st.session_state.active_trade['SL'], line_dash="dash", line_color="#ef4444", annotation_text="Stop Loss")
+        fig.add_hline(y=st.session_state.active_trade['Target'], line_dash="dash", line_color="#10b981", annotation_text="Target")
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#060911",
+        plot_bgcolor="#060911",
+        xaxis_rangeslider_visible=False,
+        height=340,
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Telemetry Row
+    ema9_val = df['EMA9'].iloc[-1]
+    ema21_val = df['EMA21'].iloc[-1]
+    rsi_val = df['RSI'].iloc[-1]
+    
+    t1, t2, t3, t4 = st.columns(4)
+    t1.write(f"*EMA 9:* ₹{ema9_val:.2f}")
+    t2.write(f"*EMA 21:* ₹{ema21_val:.2f}")
+    t3.write(f"*RSI (14):* {rsi_val:.1f}")
+    
+    if ema9_val > ema21_val and rsi_val > 52:
+        signal_state = "BUY"
+        t4.success("ट्रेंड: BULLISH 🟢")
+    elif ema9_val < ema21_val and rsi_val < 48:
+        signal_state = "SELL"
+        t4.error("ट्रेंड: BEARISH 🔴")
+    else:
+        signal_state = "WAIT"
+        t4.warning("ट्रेंड: SIDEWAYS ⚪")
+
+with col_terminal:
+    st.subheader("AI सिग्नल व ट्रेड सेटअप")
+    
+    # AI Signal Box
+    if signal_state == "BUY":
+        st.success("▲ शिफारस: *BUY (तेजी)* | 9 EMA ने 21 EMA ला वर क्रॉस केले आहे.")
+    elif signal_state == "SELL":
+        st.error("▼ शिफारस: *SELL (मंदी)* | 9 EMA 21 EMA च्या खाली गेला आहे.")
+    else:
+        st.warning("⏳ शिफारस: *WAIT (थांबा)* | स्पष्ट ब्रेकआउटची वाट पाहा.")
+
+    # Order Form or Active Trade Card
+    if st.session_state.active_trade is None:
+        qty = st.number_input("ट्रेड संख्या (Qty)", min_value=1, value=10, step=1)
+        c_sl, c_tgt = st.columns(2)
+        sl_pts = c_sl.number_input("स्टॉप लॉस (₹ SL)", min_value=1.0, value=15.0)
+        tgt_pts = c_tgt.number_input("टार्गेट (₹ Target)", min_value=1.0, value=30.0)
+        reason = st.text_input("रणनीतीचे नाव", value="EMA 9/21 क्रॉसओव्हर")
+
+        btn_c1, btn_c2 = st.columns(2)
+        if btn_c1.button("▲ BUY (खरेदी)", use_container_width=True):
+            st.session_state.active_trade = {
+                'ID': f"LAK-{st.session_state.trade_id}",
+                'Symbol': selected_symbol,
+                'Type': 'BUY',
+                'Qty': qty,
+                'Entry': current_price,
+                'SL': current_price - sl_pts,
+                'Target': current_price + tgt_pts,
+                'Reason': reason,
+                'Time': datetime.now().strftime("%H:%M:%S")
+            }
+            st.session_state.trade_id += 1
+            st.rerun()
+
+        if btn_c2.button("▼ SELL (विक्री)", use_container_width=True):
+            st.session_state.active_trade = {
+                'ID': f"LAK-{st.session_state.trade_id}",
+                'Symbol': selected_symbol,
+                'Type': 'SELL',
+                'Qty': qty,
+                'Entry': current_price,
+                'SL': current_price + sl_pts,
+                'Target': current_price - tgt_pts,
+                'Reason': reason,
+                'Time': datetime.now().strftime("%H:%M:%S")
+            }
+            st.session_state.trade_id += 1
+            st.rerun()
+
+    else:
+        tr = st.session_state.active_trade
+        st.info(f"*सक्रिय ट्रेड:* {tr['Symbol']} ({tr['Type']}) | Qty: {tr['Qty']}")
+        st.write(f"*एंट्री किंमत:* ₹{tr['Entry']:.2f}")
+        st.write(f"*SL:* ₹{tr['SL']:.2f} | *Target:* ₹{tr['Target']:.2f}")
+        
+        # MTM PnL
+        live_diff = (current_price - tr['Entry']) if tr['Type'] == 'BUY' else (tr['Entry'] - current_price)
+        live_pnl = live_diff * tr['Qty']
+        st.metric("चालू नफा/तोटा (Live P&L)", f"{'+' if live_pnl >= 0 else ''}₹{live_pnl:,.2f}")
+
+        if st.button("✕ ट्रेड बंद करा (Exit Trade)", use_container_width=True):
+            status = "WIN" if live_pnl >= 0 else "LOSS"
+            st.session_state.capital += live_pnl
+            st.session_state.journal.insert(0, {
+                'Trade ID': tr['ID'],
+                'Time': datetime.now().strftime("%H:%M:%S"),
+                'Symbol': tr['Symbol'],
+                'Type': tr['Type'],
+                'Qty': tr['Qty'],
+                'Entry': f"₹{tr['Entry']:.2f}",
+                'Exit': f"₹{current_price:.2f}",
+                'P&L (₹)': round(live_pnl, 2),
+                'Status': status,
+                'Reason': tr['Reason']
+            })
+            st.session_state.active_trade = None
+            st.rerun()
+
+st.divider()
+
+# --- Automated Trading Journal Section ---
+st.subheader(f"ऑटोमेटेड ट्रेडिंग जर्नल ({total_trades} ट्रेड्स नोंदवले)")
+
+if len(st.session_state.journal) > 0:
+    df_journal = pd.DataFrame(st.session_state.journal)
+    st.dataframe(df_journal, use_container_width=True)
+    
+    # CSV Export
+    csv_data = df_journal.to_csv(index=False).encode('utf-8')
+    c_exp1, c_exp2 = st.columns([1, 4])
+    c_exp1.download_button(
+        label="📥 CSV डाउनलोड करा",
+        data=csv_data,
+        file_name=f"Lakshya_Trading_Journal_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime='text/csv'
+    )
+    if c_exp2.button("🗑️ जर्नल डेटा रीसेट करा"):
+        st.session_state.journal = []
+        st.session_state.capital = 100000.00
+        st.session_state.active_trade = None
+        st.rerun()
+else:
+    st.info("अद्याप एकही ट्रेड बंद झालेला नाही. वरून BUY किंवा SELL करून सिम्युलेटर सुरू करा!")
