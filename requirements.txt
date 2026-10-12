@@ -1,6 +1,4 @@
-plotly
-pandas
-numpy
 streamlit
-yfinance
-streamlit-autorefresh
+scipy
+numpy
+pandas
